@@ -215,7 +215,10 @@ def grad(fun, keys, has_aux=False):
       if isinstance(key, Module):
         matches = key.find()
       if isinstance(key, str):
-        pattern = re.compile(f'^{key}(/.*|$)')
+        if key == "/dyn/dis":
+          pattern = re.compile(f'^{key}(_.*|$)') # discriminator loss 
+        else:
+          pattern = re.compile(f'^{key}(/.*|$)')
         matches = [k for k in context() if pattern.match(k)]
       if not matches:
         raise KeyError(

@@ -130,6 +130,11 @@ class MSEDist:
     self.batch_shape = mode.shape[:len(mode.shape) - dims]
     self.event_shape = mode.shape[len(mode.shape) - dims:]
 
+  def sum(a, b):
+    assert isinstance(a, MSEDist)
+    assert isinstance(b, MSEDist)
+    return MSEDist(a._mode + b._mode, len(a._dims)) # TODO: doublecheck this sketchiness
+
   def mode(self):
     return self._mode
 
@@ -147,6 +152,8 @@ class MSEDist:
       raise NotImplementedError(self._agg)
     return -loss
 
+  def neg(self):
+    self._mode = - self._mode
 
 class HuberDist:
 
@@ -483,7 +490,7 @@ class Optimizer(nj.Module):
         loss *= sg(self.grad_scale.read())
       return loss, aux
     
-    def wrapped_dis(*args, **kwargs):
+    def wrapped_dis(*args, **kwargs): # wrapper for discriminator loss
       outs = lossfn(*args, **kwargs)
       if self.dis_gp:
         loss, dis_loss, aux = outs if has_aux else (outs, None)
@@ -493,7 +500,7 @@ class Optimizer(nj.Module):
       assert loss.shape == (), (self.name, loss.shape)
       if self.scaling:
         dis_loss *= sg(self.grad_scale.read())
-      return dis_loss, aux
+      return dis_loss, aux # toss out original loss
 
     metrics = {}
     loss, params, grads, aux = nj.grad(
