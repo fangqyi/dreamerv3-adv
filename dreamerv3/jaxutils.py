@@ -424,8 +424,14 @@ class Optimizer(nj.Module):
   # Metrics
   details: bool = False
 
-  def __init__(self, lr):
+  # w discriminator 
+  # w_disc: bool = True
+  # this is discriminator opt
+  # is_disc: bool = False
+
+  def __init__(self, lr, dis_gp=True):
     self.lr = lr
+    self.dis_gp = dis_gp
     chain = []
 
     if self.globclip:
@@ -467,22 +473,45 @@ class Optimizer(nj.Module):
   def __call__(self, modules, lossfn, *args, has_aux=False, **kwargs):
     def wrapped(*args, **kwargs):
       outs = lossfn(*args, **kwargs)
-      loss, aux = outs if has_aux else (outs, None)
+      if self.dis_gp:
+        loss, _, aux = outs if has_aux else (outs, None) # toss out discriminator loss
+      else:
+        loss, aux = outs if has_aux else (outs, None)
       assert loss.dtype == f32, (self.name, loss.dtype)
       assert loss.shape == (), (self.name, loss.shape)
       if self.scaling:
         loss *= sg(self.grad_scale.read())
       return loss, aux
+    
+    def wrapped_dis(*args, **kwargs):
+      outs = lossfn(*args, **kwargs)
+      if self.dis_gp:
+        loss, dis_loss, aux = outs if has_aux else (outs, None)
+      else:
+        loss, aux = outs if has_aux else (outs, None)
+      assert loss.dtype == f32, (self.name, loss.dtype)
+      assert loss.shape == (), (self.name, loss.shape)
+      if self.scaling:
+        dis_loss *= sg(self.grad_scale.read())
+      return dis_loss, aux
 
     metrics = {}
     loss, params, grads, aux = nj.grad(
         wrapped, modules, has_aux=True)(*args, **kwargs)
+    if self.dis_gp:
+      dis_modules = "/dyn/dis"  # extract the discriminator modules
+      dis_loss, dis_params, dis_grads, _ = nj.grad(
+        wrapped_dis, dis_modules, has_aux=True)(*args, **kwargs)
     if self.scaling:
       loss /= self.grad_scale.read()
+      if self.dis_gp:
+        dis_loss /= self.grad_scale.read()
     if not isinstance(modules, (list, tuple)):
       modules = [modules]
     counts = {k: int(np.prod(v.shape)) for k, v in params.items()}
-    if self.once:
+
+    # I have not implemented any for discriminator below. the code seems to be doing grad norm stuff
+    if self.once: # first time initialization
       self.once = False
       prefs = []
       for key in counts:
@@ -491,7 +520,7 @@ class Optimizer(nj.Module):
       subcounts = {
           prefix: sum(v for k, v in counts.items() if k.startswith(prefix))
           for prefix in set(prefs)}
-      print(f'Optimizer {self.name} has {sum(counts.values()):,} variables:')
+      print(f'Optimizer {self.name} has {sum(counts.values()):,} variables (not counting discriminator params):')
       for prefix, count in sorted(subcounts.items(), key=lambda x: -x[1]):
         print(f'{count:>14,} {prefix}')
 

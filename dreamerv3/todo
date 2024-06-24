@@ -1,0 +1,3 @@
+vanilla discriminator:
+- understand how optimizer in jaxutils retrieve keys from module (can we split then and optimize dis param separately)
+

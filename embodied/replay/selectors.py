@@ -85,7 +85,7 @@ class Recency:
   def _sample(self, tree, rng, bfactor=16):
     path = []
     for level, prob in enumerate(tree):
-      segment = prob[*path]
+      segment = prob[tuple(*path)] # changed by mav
       path += (rng.choice(len(segment), p=segment),)
     index = sum(
         index * bfactor ** (len(tree) - level - 1)

@@ -211,7 +211,7 @@ def grad(fun, keys, has_aux=False):
     accessed, modified = _prerun(fun, *args, **kwargs)
 
     strs = []
-    for key in keys:
+    for key in keys: # gradient keys 
       if isinstance(key, Module):
         matches = key.find()
       if isinstance(key, str):
@@ -243,7 +243,7 @@ def grad(fun, keys, has_aux=False):
       state, (y, aux) = fun(before, *args, create=False, **kwargs)
       changes = {k: v for k, v in state.items() if k in modified}
       return y, (changes, aux)
-    backward = jax.value_and_grad(forward, has_aux=True)
+    backward = jax.value_and_grad(forward, has_aux=True) # backward
 
     (y, (changes, aux)), dx = backward(
         x1, x2, *args, seed=seed(None, True), **kwargs)
@@ -524,7 +524,7 @@ class Module(object, metaclass=ModuleMeta):
         raise KeyError(f'Key {key} does not belong to module {self.path}.')
     context().update(mapping)
 
-  def find(self, pattern=r'.*', empty_ok=False):
+  def find(self, pattern=r'.*', empty_ok=False): # returns a dictionary of keys (in context) and values
     """Find the state entries of this module, optionally filtered by regex."""
     pattern = re.compile(pattern)
     prefix = self.path + '/'

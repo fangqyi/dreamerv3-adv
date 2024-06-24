@@ -20,6 +20,7 @@ cast = jaxutils.cast_to_compute
 sample = lambda dist: {
     k: v.sample(seed=nj.seed()) for k, v in dist.items()}
 
+dis_gp = True # enable discriminator with grad penalty
 
 @jaxagent.Wrapper
 class Agent(nj.Module):
@@ -85,7 +86,11 @@ class Agent(nj.Module):
     lr = kw.pop('lr')
     if config.separate_lrs:
       lr = {f'agent/{k}': v for k, v in config.lrs.items()}
-    self.opt = jaxutils.Optimizer(lr, **kw, name='opt')
+
+    self.opt = jaxutils.Optimizer(lr, **kw, dis_gp=dis_gp, name='opt') # adding dis_gp flag
+
+    #self.disc_opt = jaxutils.Optimizer(lr, **kw, name="disc_opt") # discriminator optimizer
+    
     self.modules = [
         self.enc, self.dyn, self.dec, self.rew, self.con,
         self.actor, self.critic]
@@ -188,7 +193,7 @@ class Agent(nj.Module):
       data['is_first'] = jnp.concatenate([
           data['is_first'][:, :1] & keep, data['is_first'][:, 1:]], 1)
 
-    mets, (out, carry, metrics) = self.opt(
+    mets, (out, carry, metrics) = self.opt( # update
         self.modules, self.loss, data, carry, has_aux=True)
     metrics.update(mets)
     self.updater()
@@ -390,12 +395,18 @@ class Agent(nj.Module):
     # metrics['activation/deter'] = jnp.abs(replay_outs['deter']).mean()
 
     # Combine
+    if dis_gp: 
+      dis_losses = {"dis": losses.pop("dis"), "dis_gp": losses.pop("dis_gp")} 
+      # dis_losses = {k: v * self.scales[k] for k, v in dis_losses.items()}
+      dis_loss = jnp.stack([v.mean() for k, v in dis_losses.items()]).sum()
     losses = {k: v * self.scales[k] for k, v in losses.items()}
     loss = jnp.stack([v.mean() for k, v in losses.items()]).sum()
     newact = {k: data[k][:, -1] for k in self.act_space}
     outs = {'replay_outs': replay_outs, 'prevacts': prevacts, 'embed': embed}
     outs.update({f'{k}_loss': v for k, v in losses.items()})
     carry = (newlat, newact)
+    if dis_gp:
+      return loss, dis_loss, (outs, carry, metrics)
     return loss, (outs, carry, metrics)
 
   def report(self, data, carry):

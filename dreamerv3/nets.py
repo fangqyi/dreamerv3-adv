@@ -33,11 +33,14 @@ class RSSM(nj.Module):
   block_fans: bool = False
   block_norm: bool = False
 
-  def __init__(self, **kw):
-    self.kw = kw
+  discri_gp: bool = True # 
+
+  def __init__(self,  dis=None, **kw):
+    self.dis = dis
+    self.kw = kw    
 
   def initial(self, bsize):
-    carry = dict(
+    carry = dict(  # initial deter, stoch
         deter=jnp.zeros([bsize, self.deter], f32),
         stoch=jnp.zeros([bsize, self.stoch, self.classes], f32))
     if self.cell == 'stack':
@@ -95,10 +98,13 @@ class RSSM(nj.Module):
     return cast(carry), cast(outs)
 
   def loss(self, outs, free=1.0):
+    return self._loss_w_disc(outs) if self.discri_gp else self._loss(outs=outs, free=free)
+
+  def _loss(self, outs, free=1.0):
     metrics = {}
     prior = self._prior(outs.get('feat', outs['deter']))
     post = outs['logit']
-    dyn = self._dist(sg(post)).kl_divergence(self._dist(prior))
+    dyn = self._dist(sg(post)).kl_divergence(self._dist(prior)) 
     rep = self._dist(post).kl_divergence(self._dist(sg(prior)))
     if free:
       dyn = jnp.maximum(dyn, free)
@@ -108,6 +114,29 @@ class RSSM(nj.Module):
     metrics.update(jaxutils.tensorstats(
         self._dist(post).entropy(), 'post_ent'))
     return {'dyn': dyn, 'rep': rep}, metrics
+  
+  def _loss_w_disc(self, outs): 
+    metrics = {}
+    prior = self._prior(outs.get('feat', outs['deter']))  # dyn pred output p
+    post = outs['logit']  # encoder output q
+    dyn = self._discriminator(sg(post)) - self._discriminator(prior) # min
+    rep = self._discriminator(post) - self._discriminator(sg(prior)) 
+    disc =  - (self._discriminator(sg(post)) - self._discriminator(sg(prior))) # max
+    
+    alpha = 0.1
+    lambda_val = 1.0
+    diff = post - prior 
+    interpolates = prior + alpha * diff
+    gradients = jax.grad(self._discriminator(interpolates).mean())(interpolates)
+    slopes = jnp.sqrt(jnp.sum(gradients**2, axis=1)) # 2norm
+    grad_penalty = jnp.mean((slopes - 4.0) ** 2) # k = 4.0
+    disc_gp = grad_penalty * lambda_val
+    
+    metrics.update(jaxutils.tensorstats(
+        self._dist(prior).entropy(), 'prior_ent'))
+    metrics.update(jaxutils.tensorstats(
+        self._dist(post).entropy(), 'post_ent'))
+    return {'dyn': dyn, 'rep': rep, 'dis': disc, 'dis_gp': disc_gp}, metrics
 
   def _prior(self, feat):
     kw = dict(**self.kw, norm=self.norm, act=self.act)
@@ -116,6 +145,16 @@ class RSSM(nj.Module):
       x = self.get(f'img{i}', Linear, self.hidden, **kw)(x)
     return self._logit('imglogit', x)
 
+  def _discriminator(self, deter, stoch): # a real-valued function 
+    kw = {'layers': 3, 'units': 1024}
+    inkw = {**self.kw, 'norm': self.norm, 'binit': False}
+    stoch = stoch.reshape((stoch.shape[0], -1))
+    x0 = self.get('dis/norm', Norm, self.norm)(deter)
+    x1 = self.get('dis/in', Linear, self.hidden, **inkw)(stoch)
+    x = jnp.concatenate([x0, x1], -1)
+    out = self.get("dis/mlp", MLP, True, **kw)(x) # shape = True, so it is using special hardcoded path
+    return out
+  
   def _gru(self, deter, stoch, action):
     kw = dict(**self.kw, norm=self.norm, act=self.act)
     inkw = {**self.kw, 'norm': self.norm, 'binit': False}
@@ -218,7 +257,6 @@ class RSSM(nj.Module):
 
   def _dist(self, logit):
     return tfd.Independent(jaxutils.OneHotDist(logit.astype(f32)), 1)
-
 
 class SimpleEncoder(nj.Module):
 
@@ -378,7 +416,7 @@ class MLP(nj.Module):
 
   def __init__(self, shape, dist='mse', inputs=['tensor'], **kw):
     shape = (shape,) if isinstance(shape, (int, np.integer)) else shape
-    assert isinstance(shape, (tuple, dict, type(None))), shape
+    assert isinstance(shape, (tuple, dict, type(None), bool)), shape
     assert isinstance(dist, (str, dict)), dist
     assert isinstance(dist, dict) == isinstance(shape, dict), (dist, shape)
     self.shape = shape
@@ -394,7 +432,9 @@ class MLP(nj.Module):
     x = feat.reshape([-1, feat.shape[-1]])
     for i in range(self.layers):
       x = self.get(f'h{i}', Linear, self.units, **self.lkw)(x)
-    x = x.reshape((*feat.shape[:bdims], -1))
+    if isinstance(self.shape, bool): # my special hardcoded case....
+      x = self.get(f"h{self.layers}", Linear, 1, **self.lkw)(x) # Wasserstein discriminator is a real-valued function
+    x = x.reshape((*feat.shape[:bdims], -1)) # smash any dims after first 2 (e.g. (32, 10, 8, 8) to (32, 10, 64))
     if self.shape is None:
       return x
     elif isinstance(self.shape, dict):
