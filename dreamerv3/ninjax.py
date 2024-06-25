@@ -213,11 +213,17 @@ def grad(fun, keys, has_aux=False):
     strs = []
     for key in keys: # gradient keys 
       if isinstance(key, Module):
+        print("here in module")
         matches = key.find()
       if isinstance(key, str):
+        print("here in ins str")
+        print(key)
         if key == "/dyn/dis":
+          print("here in first")
+          print(f'^{key}(_.*|$)')
           pattern = re.compile(f'^{key}(_.*|$)') # discriminator loss 
         else:
+          print("here in sec")
           pattern = re.compile(f'^{key}(/.*|$)')
         matches = [k for k in context() if pattern.match(k)]
       if not matches:
