@@ -131,15 +131,22 @@ class RSSM(nj.Module):
     dyn = self._discriminator(sg(post)) - self._discriminator(prior) # min
     rep = self._discriminator(post) - self._discriminator(sg(prior))
     disc = - self._discriminator(sg(post)) + self._discriminator(sg(prior)) # max
-    print(self._discriminator(post).shape)
+
+    # hyperparams
     alpha = 0.1
     lambda_val = 1.0
+    k = 1.0
+
+    # samples on a line
     diff = post - prior 
-    interpolates = prior + alpha * diff # shape (16, 64, 32, 48)
-    dis_grad = jax.grad(self._discriminator) # only stoch as input, hence diff w.r.t (fefault) 0th param here
-    grad_res = dis_grad(interpolates)
-    slopes = jnp.sqrt(jnp.sum(grad_res**2, axis=1)) # 2norm
-    grad_penalty = jnp.mean((slopes - 1.0) ** 2) # k = 1.0
+    interpolates = jax.numpy.swapaxes(prior + alpha * diff, 0, 1) # shape (64, 16, 32, 48)
+    
+    # (seq_dim, batch_dim, latent_dim, one_hot_encoding)
+    grad_func = lambda x : jax.lax.map(jax.vmap(jax.grad(self._discriminator)), x)
+    grads = grad_func(interpolates)
+
+    normed_grads = jnp.sqrt(jnp.sum(grads**2, axis=1)) 
+    grad_penalty = jnp.mean((normed_grads - k) ** 2) 
     disc_gp = grad_penalty * lambda_val
     
     metrics.update(jaxutils.tensorstats(
@@ -158,17 +165,17 @@ class RSSM(nj.Module):
   def _discriminator(self, stoch): # fun: stoch -> R
     kw = {'layers': 3, 'units': 1024}
     inkw = {**self.kw, 'norm': self.norm, 'binit': False}
-    #print(deter.shape)
-    # stoch shape (16, 64, 32, 48)
-    stoch = stoch.reshape((stoch.shape[0], stoch.shape[1], -1))
-    print("stoch in MLP", stoch.shape)
-    #x0 = self.get('dis_norm', Norm, self.norm)(deter)
+    if len(stoch.shape) == 4:
+      bdims = 2
+      stoch = stoch.reshape((stoch.shape[0], stoch.shape[1], -1))
+    else:
+      assert len(stoch.shape) == 2
+      bdims = 0
+      stoch = stoch.reshape((-1)) 
     x1 = self.get('dis_in', Linear, self.hidden, **inkw)(stoch)
-    print("stoch in MLP", stoch.shape)
-    #x = jnp.concatenate([x1], -1)
-    print("stoch in MLP", stoch.shape)
-    out = self.get("dis_mlp", MLP, True, **kw)(x1) # shape = True, so it is using special hardcoded path
-    print("out in MLP", out.shape) # out in MLP (16, 768, 1)
+    out = self.get("dis_mlp", MLP, True, **kw)(x1, bdims=bdims) # shape = True, so it is using special hardcoded path
+    if bdims == 0:
+      out = jnp.reshape(out, ()) # flatten to be compatible with scalar-output in grad computation
     return out
   
   def _gru(self, deter, stoch, action):
