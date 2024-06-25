@@ -398,7 +398,7 @@ class Agent(nj.Module):
     if dis_gp: 
       dis_losses = {"dis": losses.pop("dis"), "dis_gp": losses.pop("dis_gp")} 
       # dis_losses = {k: v * self.scales[k] for k, v in dis_losses.items()}
-      dis_loss = jnp.stack([v.mean() for k, v in dis_losses.items()]).sum()
+      # dis_loss = jnp.stack([v.mean() for k, v in dis_losses.items()]).sum()
     losses = {k: v * self.scales[k] for k, v in losses.items()}
     loss = jnp.stack([v.mean() for k, v in losses.items()]).sum()
     newact = {k: data[k][:, -1] for k in self.act_space}
@@ -406,7 +406,7 @@ class Agent(nj.Module):
     outs.update({f'{k}_loss': v for k, v in losses.items()})
     carry = (newlat, newact)
     if dis_gp:
-      return loss, dis_loss, (outs, carry, metrics)
+      loss = loss + 3 * dis_losses["dis"].mean() + dis_losses["dis_gp"]
     return loss, (outs, carry, metrics)
 
   def report(self, data, carry):
@@ -418,10 +418,7 @@ class Agent(nj.Module):
     data = self.preprocess(data)
 
     # Train metrics
-    if dis_gp:
-      _, __, (outs, carry_out, mets) = self.loss(data, carry, update=False)
-    else:
-      _, (outs, carry_out, mets) = self.loss(data, carry, update=False)
+    _, (outs, carry_out, mets) = self.loss(data, carry, update=False)
     metrics.update(mets)
 
     # Open loop predictions

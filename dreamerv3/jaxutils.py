@@ -480,40 +480,37 @@ class Optimizer(nj.Module):
   def __call__(self, modules, lossfn, *args, has_aux=False, **kwargs):
     def wrapped(*args, **kwargs):
       outs = lossfn(*args, **kwargs)
-      if self.dis_gp:
-        loss, _, aux = outs if has_aux else (outs, None) # toss out discriminator loss
-      else:
-        loss, aux = outs if has_aux else (outs, None)
+      loss, aux = outs if has_aux else (outs, None)
       assert loss.dtype == f32, (self.name, loss.dtype)
       assert loss.shape == (), (self.name, loss.shape)
       if self.scaling:
         loss *= sg(self.grad_scale.read())
       return loss, aux
     
-    def wrapped_dis(*args, **kwargs): # wrapper for discriminator loss
-      outs = lossfn(*args, **kwargs)
-      if self.dis_gp:
-        loss, dis_loss, aux = outs if has_aux else (outs, None)
-      else:
-        loss, aux = outs if has_aux else (outs, None)
-      assert loss.dtype == f32, (self.name, loss.dtype)
-      assert loss.shape == (), (self.name, loss.shape)
-      if self.scaling:
-        dis_loss *= sg(self.grad_scale.read())
-      return dis_loss, aux # toss out original loss
+    # def wrapped_dis(*args, **kwargs): # wrapper for discriminator loss
+    #   outs = lossfn(*args, **kwargs)
+    #   if self.dis_gp:
+    #     loss, dis_loss, aux = outs if has_aux else (outs, None)
+    #   else:
+    #     loss, aux = outs if has_aux else (outs, None)
+    #   assert loss.dtype == f32, (self.name, loss.dtype)
+    #   assert loss.shape == (), (self.name, loss.shape)
+    #   if self.scaling:
+    #     dis_loss *= sg(self.grad_scale.read())
+    #   return dis_loss, aux # toss out original loss
 
     metrics = {}
     loss, params, grads, aux = nj.grad(
         wrapped, modules, has_aux=True)(*args, **kwargs)
-    if self.dis_gp:
-      dis_modules = "agent/dyn/dis"  # extract the discriminator modules
-      # print(dis_modules)
-      dis_loss, dis_params, dis_grads, _ = nj.grad(
-        wrapped_dis, dis_modules, has_aux=True)(*args, **kwargs)
+    # if self.dis_gp:
+    #   dis_modules = "agent/dyn/dis"  # extract the discriminator modules
+    #   # print(dis_modules)
+    #   dis_loss, dis_params, dis_grads, _ = nj.grad(
+    #     wrapped_dis, dis_modules, has_aux=True)(*args, **kwargs)
     if self.scaling:
       loss /= self.grad_scale.read()
-      if self.dis_gp:
-        dis_loss /= self.grad_scale.read()
+      # if self.dis_gp:
+      #   dis_loss /= self.grad_scale.read()
     if not isinstance(modules, (list, tuple)):
       modules = [modules]
     counts = {k: int(np.prod(v.shape)) for k, v in params.items()}

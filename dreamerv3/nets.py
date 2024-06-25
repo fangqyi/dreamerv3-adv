@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from tensorflow_probability.substrates import jax as tfp
+from functools import partial as bind
 
 from . import jaxutils
 from . import ninjax as nj
@@ -138,14 +139,14 @@ class RSSM(nj.Module):
     k = 1.0
 
     # samples on a line
-    diff = post - prior 
-    interpolates = jax.numpy.swapaxes(prior + alpha * diff, 0, 1) # shape (64, 16, 32, 48)
+    diff = post - prior
+    diff_shape = diff.shape
+    interpolates = (prior + alpha * diff).reshape((-1, *diff_shape[2:]))   # (1024, 32, 64)
     
-    # (seq_dim, batch_dim, latent_dim, one_hot_encoding)
-    grad_func = lambda x : jax.lax.map(jax.vmap(jax.grad(self._discriminator)), x)
-    grads = grad_func(interpolates)
-
-    normed_grads = jnp.sqrt(jnp.sum(grads**2, axis=1)) 
+    grad_func = lambda x : jax.vmap(jax.grad(bind(self._discriminator, bdims=0)))(x)
+    grads = grad_func(interpolates)   # (1024, 32, 64)
+    
+    normed_grads = jnp.sqrt(jnp.sum(grads**2, axis=(1, 2))) 
     grad_penalty = jnp.mean((normed_grads - k) ** 2) 
     disc_gp = grad_penalty * lambda_val
     
@@ -162,16 +163,9 @@ class RSSM(nj.Module):
       x = self.get(f'img{i}', Linear, self.hidden, **kw)(x)
     return self._logit('imglogit', x)
 
-  def _discriminator(self, stoch): # fun: stoch -> R
+  def _discriminator(self, stoch, bdims=2): # fun: stoch -> R
     kw = {'layers': 3, 'units': 1024}
     inkw = {**self.kw, 'norm': self.norm, 'binit': False}
-    if len(stoch.shape) == 4:
-      bdims = 2
-      stoch = stoch.reshape((stoch.shape[0], stoch.shape[1], -1))
-    else:
-      assert len(stoch.shape) == 2
-      bdims = 0
-      stoch = stoch.reshape((-1)) 
     x1 = self.get('dis_in', Linear, self.hidden, **inkw)(stoch)
     out = self.get("dis_mlp", MLP, True, **kw)(x1, bdims=bdims) # shape = True, so it is using special hardcoded path
     if bdims == 0:
