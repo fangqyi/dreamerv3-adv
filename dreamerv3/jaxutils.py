@@ -506,7 +506,7 @@ class Optimizer(nj.Module):
     loss, params, grads, aux = nj.grad(
         wrapped, modules, has_aux=True)(*args, **kwargs)
     if self.dis_gp:
-      dis_modules = "/dyn/dis"  # extract the discriminator modules
+      dis_modules = "agent/dyn/dis"  # extract the discriminator modules
       print(dis_modules)
       dis_loss, dis_params, dis_grads, _ = nj.grad(
         wrapped_dis, dis_modules, has_aux=True)(*args, **kwargs)

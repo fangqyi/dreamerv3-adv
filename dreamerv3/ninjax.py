@@ -202,7 +202,10 @@ def grad(fun, keys, has_aux=False):
   state entries or modules. The transformed function returns a tuple containing
   the computed value, selected state entries, their gradients, and if
   applicable auxiliary outputs of the function."""
-  keys = keys if hasattr(keys, '__len__') else (keys,)
+  if isinstance(keys, str):  # original code might has a bug, cannot parse single string correctly to turn into tuple, not the best fix
+    keys = (keys, )
+  else:
+    keys = keys if hasattr(keys, '__len__') else (keys,)
   if not has_aux:
     fun = lambda *args, _fun=fun, **kwargs: (_fun(*args, *kwargs), {})
   fun = pure(fun, nested=True)
@@ -213,17 +216,11 @@ def grad(fun, keys, has_aux=False):
     strs = []
     for key in keys: # gradient keys 
       if isinstance(key, Module):
-        print("here in module")
         matches = key.find()
       if isinstance(key, str):
-        print("here in ins str")
-        print(key)
-        if key == "/dyn/dis":
-          print("here in first")
-          print(f'^{key}(_.*|$)')
+        if key == "agent/dyn/dis": # hardcoded for discriminator submodule inside RSSM module
           pattern = re.compile(f'^{key}(_.*|$)') # discriminator loss 
         else:
-          print("here in sec")
           pattern = re.compile(f'^{key}(/.*|$)')
         matches = [k for k in context() if pattern.match(k)]
       if not matches:
