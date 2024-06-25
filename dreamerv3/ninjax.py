@@ -194,7 +194,8 @@ def creating():
 ###############################################################################
 # Transformations
 ###############################################################################
-
+dis_gp = True
+dis_key = "agent/dyn/dis"
 
 @jax.named_scope('grad')
 def grad(fun, keys, has_aux=False):
@@ -215,10 +216,13 @@ def grad(fun, keys, has_aux=False):
 
     strs = []
     for key in keys: # gradient keys 
-      if isinstance(key, Module):
+      if isinstance(key, Module): # assumes only normal update use module
         matches = key.find()
+        if dis_gp:  # filter out discriminator module
+          dis_pattern = re.compile(f'^{dis_key}(_.*|$)')
+          matches = [k for k in matches if not dis_pattern.match(k)]
       if isinstance(key, str):
-        if key == "agent/dyn/dis": # hardcoded for discriminator submodule inside RSSM module
+        if key == dis_key: # hardcoded for discriminator submodule inside RSSM module
           pattern = re.compile(f'^{key}(_.*|$)') # discriminator loss 
         else:
           pattern = re.compile(f'^{key}(/.*|$)')
