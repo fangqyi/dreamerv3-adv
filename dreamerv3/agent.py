@@ -418,7 +418,10 @@ class Agent(nj.Module):
     data = self.preprocess(data)
 
     # Train metrics
-    _, (outs, carry_out, mets) = self.loss(data, carry, update=False)
+    if dis_gp:
+      _, __, (outs, carry_out, mets) = self.loss(data, carry, update=False)
+    else:
+      _, (outs, carry_out, mets) = self.loss(data, carry, update=False)
     metrics.update(mets)
 
     # Open loop predictions
