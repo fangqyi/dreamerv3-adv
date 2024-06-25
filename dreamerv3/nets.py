@@ -145,7 +145,8 @@ class RSSM(nj.Module):
     grad_func = lambda x : jax.lax.map(jax.vmap(jax.grad(self._discriminator)), x)
     grads = grad_func(interpolates)
 
-    normed_grads = jnp.sqrt(jnp.sum(grads**2, axis=1)) 
+    #print(grads.shape)
+    normed_grads = jnp.sqrt(jnp.sum(jnp.sum(grads**2, axis=3), axis=2)) 
     grad_penalty = jnp.mean((normed_grads - k) ** 2) 
     disc_gp = grad_penalty * lambda_val
     
