@@ -572,6 +572,8 @@ class Optimizer(nj.Module):
         'rew': r'/rew/.*',
         'actor': r'/actor/.*',
         'critic': r'/critic/.*',
+        'adv_actor': r'/adv_actor/.*',
+        'adv_critic': r'/adv_critic/.*',
         'out': r'/out/kernel$',
         'repr': r'/repr_logit/kernel$',
         'prior': r'/prior_logit/kernel$',

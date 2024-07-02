@@ -6,7 +6,7 @@ import embodied
 import numpy as np
 
 
-def train(make_agent, make_replay, make_env, make_logger, args):
+def train(make_agent, make_replay, make_env, make_logger, args):  # called once in main, vanilla train
 
   agent = make_agent()
   replay = make_replay()
@@ -83,7 +83,7 @@ def train(make_agent, make_replay, make_env, make_logger, args):
       return
     for _ in range(should_train(step)):
       with embodied.timer.section('dataset_next'):
-        batch = next(dataset_train)
+        batch = next(dataset_train)  # obtain training data
       outs, carry[0], mets = agent.train(batch, carry[0])
       train_fps.step(batch_steps)
       if 'replay' in outs:
@@ -103,10 +103,13 @@ def train(make_agent, make_replay, make_env, make_logger, args):
   print('Start training loop')
   policy = lambda *args: agent.policy(
       *args, mode='explore' if should_expl(step) else 'train')
+  adv_policy = lambda *args: agent.policy(*args, mode='adv_train')
   driver.reset(agent.init_policy)
   while step < args.steps:
 
     driver(policy, steps=10)
+    if args.is_adv_agent:
+      driver(adv_policy, steps=10)
 
     if should_eval(step) and len(replay):
       mets, _ = agent.report(next(dataset_report), carry_report)

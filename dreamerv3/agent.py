@@ -80,6 +80,30 @@ class Agent(nj.Module):
         self.config.slow_critic_update,
         name='updater')
 
+    adv_kwargs = {}
+    adv_kwargs['shape'] = {
+        k: (*s.shape, s.classes) if s.discrete else s.shape
+        for k, s in self.act_space.items()}
+    adv_kwargs['dist'] = {
+        k: config.actor_dist_disc if v.discrete else config.actor_dist_cont
+        for k, v in self.act_space.items()}
+    
+    # Adversarial actor
+    self.adv_actor = nets.MLP(**adv_kwargs, **config.actor, name='adv_actor')
+    self.adv_retnorm = jaxutils.Moments(**config.retnorm, name='adv_retnorm')
+    self.adv_valnorm = jaxutils.Moments(**config.valnorm, name='adv_valnorm')
+    self.adv_advnorm = jaxutils.Moments(**config.advnorm, name='adv_advnorm')
+
+    # Adversarial critic
+    self.adv_critic = nets.MLP((), name='adv_critic', **self.config.critic)
+    self.adv_slowcritic = nets.MLP(
+        (), name='adv_slowcritic', **self.config.critic, dtype='float32')
+    self.adv_updater = jaxutils.SlowUpdater(
+        self.adv_critic, self.adv_slowcritic,
+        self.config.slow_critic_fraction,
+        self.config.slow_critic_update,
+        name='adv_updater')
+
     # Optimizer
     kw = dict(config.opt)
     lr = kw.pop('lr')
@@ -135,8 +159,8 @@ class Agent(nj.Module):
     prevact = jaxutils.onehot_dict(prevact, self.act_space)
     lat, out = self.dyn.observe(
         prevlat, prevact, embed, obs['is_first'], bdims=1)
-    actor = self.actor(out, bdims=1)
-    act = sample(actor)
+    actor = self.adv_actor(out, bdims=1) if mode == "adv_train" else self.actor(out, bdims=1)  # return dict of act dist 
+    act = sample(actor)  # sample from dis 
 
     outs = {}
     if self.config.replay_context:
@@ -188,7 +212,7 @@ class Agent(nj.Module):
       data['is_first'] = jnp.concatenate([
           data['is_first'][:, :1] & keep, data['is_first'][:, 1:]], 1)
 
-    mets, (out, carry, metrics) = self.opt(
+    mets, (out, carry, metrics) = self.opt(  # update
         self.modules, self.loss, data, carry, has_aux=True)
     metrics.update(mets)
     self.updater()
@@ -243,7 +267,7 @@ class Agent(nj.Module):
       del losses['cont']
       softlabel = data['cont'] * (1 - 1 / self.config.horizon)
       losses['cont'] = -dists['cont'].log_prob(softlabel)
-    dynlosses, mets = self.dyn.loss(outs, **self.config.rssm_loss)
+    dynlosses, mets = self.dyn.loss(outs, **self.config.rssm_loss) # compute dynamics model losses
     losses.update(dynlosses)
     metrics.update(mets)
     replay_outs = outs
@@ -252,26 +276,31 @@ class Agent(nj.Module):
     def imgstep(carry, _):
       lat, act = carry
       lat, out = self.dyn.imagine(lat, act, bdims=1)
+      dynloss, _ = self.dyn.loss(out)
       out['stoch'] = sg(out['stoch'])
+      out['adv'] = 0.5 * (sg(dynloss['dyn']) + sg(dynloss['rep']))
       act = cast(sample(self.actor(out, bdims=1)))
       return (lat, act), (out, act)
+    
     rew = data['reward']
     con = 1 - f32(data['is_terminal'])
+    adv_rew = 0.5 * (sg(dynlosses["dyn"]) + sg(dynlosses["rep"]))
     if self.config.imag_start == 'all':
       B, T = data['is_first'].shape
       startlat = self.dyn.outs_to_carry(treemap(
           lambda x: x.reshape((B * T, 1, *x.shape[2:])), replay_outs))
-      startout, startrew, startcon = treemap(
+      startout, startrew, startcon, startadv_rew = treemap(
           lambda x: x.reshape((B * T, *x.shape[2:])),
-          (replay_outs, rew, con))
+          (replay_outs, rew, con, adv_rew))
+      startout['adv'] = jnp.zeros((startout['stoch'].shape[0], ), f32)
     elif self.config.imag_start == 'last':
       startlat = newlat
-      startout, startrew, startcon = treemap(
-          lambda x: x[:, -1], (replay_outs, rew, con))
+      startout, startrew, startcon, startadv_rew = treemap(
+          lambda x: x[:, -1], (replay_outs, rew, con, adv_rew))
     if self.config.imag_repeat > 1:
       N = self.config.imag_repeat
-      startlat, startout, startrew, startcon = treemap(
-          lambda x: x.repeat(N, 0), (startlat, startout, startrew, startcon))
+      startlat, startout, startrew, startcon, startadv_rew = treemap(
+          lambda x: x.repeat(N, 0), (startlat, startout, startrew, startcon, startadv_rew))
     startact = cast(sample(self.actor(startout, bdims=1)))
     _, (outs, acts) = jaxutils.scan(
         imgstep, sg((startlat, startact)),
@@ -284,12 +313,14 @@ class Agent(nj.Module):
     # Annotate
     rew = jnp.concatenate([startrew[:, None], self.rew(outs).mean()[:, 1:]], 1)
     con = jnp.concatenate([startcon[:, None], self.con(outs).mean()[:, 1:]], 1)
+    adv_rew = outs['adv']
     acts = sg(acts)
     inp = treemap({
         'none': lambda x: sg(x),
         'first': lambda x: jnp.concatenate([x[:, :1], sg(x[:, 1:])], 1),
         'all': lambda x: x,
     }[self.config.ac_grads], outs)
+
     actor = self.actor(inp)
     critic = self.critic(inp)
     slowcritic = self.slowcritic(inp)
@@ -299,6 +330,17 @@ class Agent(nj.Module):
     tarval = slowval if self.config.slowtar else val
     discount = 1 if self.config.contdisc else 1 - 1 / self.config.horizon
     weight = jnp.cumprod(discount * con, 1) / discount
+
+    #####################################################################################
+    adv_actor = self.adv_actor(inp)
+    adv_critic = self.adv_critic(inp)
+    
+    adv_slowcritic = self.adv_slowcritic(inp)
+    adv_voffset, adv_vscale = self.adv_valnorm.stats()
+    adv_val = adv_critic.mean() * adv_vscale + adv_voffset
+    adv_slowval = adv_slowcritic.mean() * adv_vscale + adv_voffset
+    adv_tarval = adv_slowval if self.config.slowtar else adv_val
+    #####################################################################################
 
     # Return
     rets = [tarval[:, -1]]
@@ -310,12 +352,12 @@ class Agent(nj.Module):
     ret = jnp.stack(list(reversed(rets))[:-1], 1)
 
     # Actor
-    roffset, rscale = self.retnorm(ret, update)
-    adv = (ret - tarval[:, :-1]) / rscale
-    aoffset, ascale = self.advnorm(adv, update)
-    adv_normed = (adv - aoffset) / ascale
+    roffset, rscale = self.retnorm(ret, update)  # normalize returns
+    adv = (ret - tarval[:, :-1]) / rscale  # compute adv
+    aoffset, ascale = self.advnorm(adv, update)  # normalize adv
+    adv_normed = (adv - aoffset) / ascale # normalize after substracting offset
     logpi = sum([v.log_prob(sg(acts[k]))[:, :-1] for k, v in actor.items()])
-    ents = {k: v.entropy()[:, :-1] for k, v in actor.items()}
+    ents = {k: v.entropy()[:, :-1] for k, v in actor.items()} # entropy of actor policy for exploration
     actor_loss = sg(weight[:, :-1]) * -(
         logpi * sg(adv_normed) + self.config.actent * sum(ents.values()))
     losses['actor'] = actor_loss
@@ -327,6 +369,35 @@ class Agent(nj.Module):
     losses['critic'] = sg(weight)[:, :-1] * -(
         critic.log_prob(sg(ret_padded)) +
         self.config.slowreg * critic.log_prob(sg(slowcritic.mean())))[:, :-1]
+    
+    ###########################################################################################################################
+    # Adv return
+    adv_rets = [adv_tarval[:, -1]]
+    adv_interm = adv_rew[:, 1:] + (1 - lam) * disc * adv_tarval[:, 1:]  # 
+    for t in reversed(range(disc.shape[1])):
+      adv_rets.append(adv_interm[:, t] + disc[:, t] * lam * adv_rets[-1])
+    adv_ret = jnp.stack(list(reversed(adv_rets))[:-1], 1)  
+    
+    # Adv actor
+    adv_roffset, adv_rscale = self.adv_retnorm(adv_ret, update)  # normalize returns
+    adv_adv = (adv_ret - adv_tarval[:, :-1]) / adv_rscale  # compute adv
+    adv_aoffset, adv_ascale = self.adv_advnorm(adv_adv, update)  # normalize adv
+    adv_adv_normed = (adv_adv - adv_aoffset) / adv_ascale # normalize after substracting offset
+    adv_logpi = sum([v.log_prob(sg(acts[k]))[:, :-1] for k, v in adv_actor.items()])
+    adv_ents = {k: v.entropy()[:, :-1] for k, v in adv_actor.items()} # entropy of actor policy for exploration
+    adv_actor_loss = sg(weight[:, :-1]) * -(
+        adv_logpi * sg(adv_adv_normed) + self.config.actent * sum(adv_ents.values()))
+    losses['adv_actor'] = adv_actor_loss
+
+    # Adv critic
+    adv_voffset, adv_vscale = self.adv_valnorm(adv_ret, update)
+    adv_ret_normed = (adv_ret - adv_voffset) / adv_vscale
+    adv_ret_padded = jnp.concatenate([adv_ret_normed, 0 * adv_ret_normed[:, -1:]], 1)
+    losses['adv_critic'] = sg(weight)[:, :-1] * -(
+        adv_critic.log_prob(sg(adv_ret_padded)) +
+        self.config.slowreg * adv_critic.log_prob(sg(adv_slowcritic.mean())))[:, :-1]
+
+    ###########################################################################################################################
 
     if self.config.replay_critic_loss:
       replay_critic = self.critic(
@@ -355,12 +426,17 @@ class Agent(nj.Module):
     metrics.update({f'{k}_loss': v.mean() for k, v in losses.items()})
     metrics.update({f'{k}_loss_std': v.std() for k, v in losses.items()})
     metrics.update(jaxutils.tensorstats(adv, 'adv'))
+    metrics.update(jaxutils.tensorstats(adv_adv, 'adv_adv'))
     metrics.update(jaxutils.tensorstats(rew, 'rew'))
+    metrics.update(jaxutils.tensorstats(adv_rew, 'adv_rew')) # probably wrong size
     metrics.update(jaxutils.tensorstats(weight, 'weight'))
     metrics.update(jaxutils.tensorstats(val, 'val'))
     metrics.update(jaxutils.tensorstats(ret, 'ret'))
+    metrics.update(jaxutils.tensorstats(adv_ret, 'adv_ret'))
     metrics.update(jaxutils.tensorstats(
         (ret - roffset) / rscale, 'ret_normed'))
+    metrics.update(jaxutils.tensorstats(
+        (adv_ret - adv_roffset) / adv_rscale, 'adv_ret_normed'))
     if self.config.replay_critic_loss:
       metrics.update(jaxutils.tensorstats(replay_ret, 'replay_ret'))
     metrics['td_error'] = jnp.abs(ret - val[:, :-1]).mean()
@@ -387,10 +463,9 @@ class Agent(nj.Module):
       stats = jaxutils.balance_stats(dists['cont'], data['cont'], 0.5)
       metrics.update({f'constats/{k}': v for k, v in stats.items()})
     metrics['activation/embed'] = jnp.abs(embed).mean()
-    # metrics['activation/deter'] = jnp.abs(replay_outs['deter']).mean()
 
     # Combine
-    losses = {k: v * self.scales[k] for k, v in losses.items()}
+    losses = {k: v * self.scales[k] if k[:4]!='adv_' else v * self.scales[k[4:]] for k, v in losses.items()}
     loss = jnp.stack([v.mean() for k, v in losses.items()]).sum()
     newact = {k: data[k][:, -1] for k in self.act_space}
     outs = {'replay_outs': replay_outs, 'prevacts': prevacts, 'embed': embed}

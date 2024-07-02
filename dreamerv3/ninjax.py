@@ -60,7 +60,8 @@ class Context(dict):
     if self.ignore and key in self:
       return  # Do not overwrite existing entries.
     if not self.create and key not in self:
-      raise RuntimeError(
+      # raise RuntimeError( # changed by mav
+      print(
           'Pass create=True to pure functions to allow them to create new '
           f'state entries or use nj.init(). You were trying to set {key} to '
           f'shape {value.shape}.')

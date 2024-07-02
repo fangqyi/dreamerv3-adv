@@ -114,7 +114,7 @@ class Replay:
       stream = self.streams[worker]
       chunk = self.chunks[chunkid]
       assert chunk.length == index, (chunk.length, index)
-      chunk.append(step)
+      chunk.append(step)  # adding data step to chunk
       assert chunk.length == index + 1, (chunk.length, index + 1)
       stream.append((chunkid, index))
       with self.refs_lock:
@@ -265,7 +265,7 @@ class Replay:
     # a non-consecutive view into a longer batch. For example, this allows
     # near-instant serialization when sending over the network.
     while True:
-      seqs, is_online = zip(*[self._sample() for _ in range(batch)])
+      seqs, is_online = zip(*[self._sample() for _ in range(batch)]) # gather samples from the buffer
       if not length or length == self.length:
         data = self._assemble_batch(seqs, 0, self.length)
         data = self._annotate_batch(data, is_online, is_first=True)

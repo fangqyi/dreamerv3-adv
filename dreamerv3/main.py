@@ -44,7 +44,8 @@ def main(argv=None):
       batch_length_eval=config.batch_length_eval,
       replay_length=config.replay_length,
       replay_length_eval=config.replay_length_eval,
-      replay_context=config.replay_context)
+      replay_context=config.replay_context,
+      is_adv_agent=config.is_adv_agent)
   print('Run script:', args.script)
   print('Logdir:', args.logdir)
 
