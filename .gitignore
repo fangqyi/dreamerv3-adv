@@ -4,4 +4,6 @@ __pycache__/
 *.py[cod]
 *.egg-info
 MUJOCO_LOG.TXT
+logdir*/
+lab/
 ;

@@ -3,7 +3,7 @@ defaults:
   seed: 0
   method: name
   task: dummy_disc
-  logdir: ../logdir_v3_dis_w_adv_agent_separate
+  logdir: logdir_v3_dis_w_adv_agent_separate_v3
   eval_dir: ''
   filter: 'score|length|fps|ratio|train/.*_loss$|train/rand/.*/mean'
   tensorboard_videos: True

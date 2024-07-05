@@ -112,7 +112,7 @@ class Agent(nj.Module):
     self.opt = jaxutils.Optimizer(lr, **kw, name='opt')
     self.modules = [
         self.enc, self.dyn, self.dec, self.rew, self.con,
-        self.actor, self.critic]
+        self.actor, self.critic, self.adv_actor, self.adv_critic]
     scales = self.config.loss_scales.copy()
     cnn = scales.pop('dec_cnn')
     mlp = scales.pop('dec_mlp')
@@ -122,7 +122,7 @@ class Agent(nj.Module):
 
   @property
   def policy_keys(self):
-    return '/(enc|dyn|actor)/'
+    return '/(enc|dyn|actor|adv_actor)/'
 
   @property
   def aux_spaces(self):
