@@ -3,7 +3,7 @@ defaults:
   seed: 0
   method: name
   task: dummy_disc
-  logdir: logdir_v3_dis_w_adv_agent_separate_v3
+  logdir: /home/qyfang/logdir_v3_dis_w_adv_agent_separate/dm_vision/quad/{timestamp}
   eval_dir: ''
   filter: 'score|length|fps|ratio|train/.*_loss$|train/rand/.*/mean'
   tensorboard_videos: True
@@ -239,7 +239,7 @@ dmc_proprio:
 
 dmc_vision:
   <<: *size12m
-  task: dmc_walker_walk
+  task: dmc_quadruped_walk
   run.train_ratio: 512
   run.steps: 6e5
   enc.spaces: 'image'
