@@ -108,6 +108,53 @@ class RSSM(nj.Module):
     metrics.update(jaxutils.tensorstats(
         self._dist(post).entropy(), 'post_ent'))
     return {'dyn': dyn, 'rep': rep}, metrics
+    
+  def get_perturbed_img(self, enc, act_space, prevlat, prevact, data):
+    #print(data)
+    #print(prevact)
+    data_cp = data.copy()
+    image = data_cp['image']
+    prevacts = {
+        k: jnp.concatenate([prevact[k][:, None], data[k][:, :-1]], 1)
+        for k in act_space}
+    prevacts = jaxutils.onehot_dict(prevacts, act_space) # [batch, seq, :]
+    perturb = jax.numpy.zeros(image.shape)
+    carry = prevlat
+    for seqidx in range(image.shape[1]):
+      #print("seq", seqidx)
+      curacts = {k: prevacts[k][:, seqidx] for k in prevacts.keys()}
+      curdata = {k: data[k][:, seqidx] for k in data.keys()}
+      curimg = curdata.pop('image')   
+      def dyn_loss(img, carry, data, curacts):
+        data['image'] = img 
+        data = {k: data[k][None] for k in data.keys()}
+        #print(data)
+        embed = enc(data, bdims=1)
+        carry, outs = self.observe(carry, curacts, embed, data['is_first'], bdims=1)
+        post = outs['logit']
+        prior = self._prior(outs.get('feat', outs['deter']))
+        return self._dist(post).kl_divergence(self._dist(prior))[0], {k: carry[k][0] for k in carry.keys()}
+      next_carry = []
+      for batchidx in range(image.shape[0]):  
+        #print('batch', batchidx)
+        if isinstance(carry, dict):
+          carry_val = {k: carry[k][batchidx][None] for k in carry.keys()}
+        else:
+          carry_val = {k: carry[batchidx][k][None] for k in carry[batchidx].keys()}
+        curdata_val = {k: curdata[k][batchidx] for k in curdata.keys()}
+        curacts_val = {k: curacts[k][batchidx][None] for k in curacts.keys()}
+        grad_val, carry_val = jax.grad(dyn_loss, has_aux=True)(curimg[batchidx], carry_val, curdata_val, curacts_val)
+        next_carry.append(carry_val)
+        perturb = perturb.at[batchidx, seqidx].add(0.5 * jax.numpy.sign(sg(grad_val)))
+      carry = next_carry
+    return perturb
+    # data [batch, seq, :]
+    #jaxutils.scan(jax.vmap(loss_grad, in_axes=(0, 0)), prev, data)
+    # prev [batch, :]
+    #data = {k: jax.numpy.swapaxes(data[k], 0, 1) for k in data.keys()} # [seq, batch, :]
+    #grad_func = lambda x : jaxutils.scan(jax.lax.map(bind(jax.vmap(bind(self.dyn.loss_grad, self.enc, self.act_space), in_axes=(0, 0, 0)), prevlat, prevact), x)
+    #data['image'] += jax.numpy.sign(grad_func(data)).reshape(data['image'].shape) * 0.5 # epilson = 0.5 perturbation scale
+
 
   def _prior(self, feat):
     kw = dict(**self.kw, norm=self.norm, act=self.act)
@@ -261,7 +308,7 @@ class SimpleEncoder(nj.Module):
       outs.append(x)
 
     if self.imgkeys:
-      print('ENC')
+      #print('ENC')
       x = self.imginp(data, bdims, jaxutils.COMPUTE_DTYPE) - 0.5
       x = x.reshape((-1, *x.shape[bdims:]))
       for i, depth in enumerate(self.depths):
@@ -269,7 +316,7 @@ class SimpleEncoder(nj.Module):
         x = self.get(f'conv{i}', Conv2D, depth, self.kernel, stride, **kw)(x)
       assert x.shape[-3] == x.shape[-2] == self.minres, x.shape
       x = x.reshape((x.shape[0], -1))
-      print(x.shape, 'out')
+      #print(x.shape, 'out')
       outs.append(x)
 
     x = jnp.concatenate(outs, -1)

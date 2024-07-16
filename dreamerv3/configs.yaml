@@ -3,7 +3,7 @@ defaults:
   seed: 0
   method: name
   task: dummy_disc
-  logdir: /dev/null
+  logdir: /home/qyfang/logdir_v3_image_w_grad_perturb_0.5/{timestamp}
   eval_dir: ''
   filter: 'score|length|fps|ratio|train/.*_loss$|train/rand/.*/mean'
   tensorboard_videos: True

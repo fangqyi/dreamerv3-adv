@@ -1,5 +1,6 @@
 import re
 from functools import partial as bind
+import random
 
 import embodied
 import jax
@@ -188,6 +189,14 @@ class Agent(nj.Module):
       data['is_first'] = jnp.concatenate([
           data['is_first'][:, :1] & keep, data['is_first'][:, 1:]], 1)
 
+    ################################################################################
+    # add perturbation to 'image' state data
+
+    if random.random() < 0.1:  # add perturbation to 30% of training
+      data['image'] = self.dyn.get_perturbed_img(self.enc, self.act_space, prevlat, prevact, data) 
+      
+    ################################################################################
+
     mets, (out, carry, metrics) = self.opt(
         self.modules, self.loss, data, carry, has_aux=True)
     metrics.update(mets)
@@ -225,7 +234,6 @@ class Agent(nj.Module):
   def loss(self, data, carry, update=True):
     metrics = {}
     prevlat, prevact = carry
-
     # Replay rollout
     prevacts = {
         k: jnp.concatenate([prevact[k][:, None], data[k][:, :-1]], 1)
