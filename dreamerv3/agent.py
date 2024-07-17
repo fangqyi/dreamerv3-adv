@@ -192,8 +192,7 @@ class Agent(nj.Module):
     ################################################################################
     # add perturbation to 'image' state data
 
-    if random.random() < 0.1:  # add perturbation to 30% of training
-      data['image'] = self.dyn.get_perturbed_img(self.enc, self.act_space, prevlat, prevact, data) 
+    data['image'] += self.dyn.get_perturbed_img(self.enc, self.act_space, prevlat, prevact, data)
       
     ################################################################################
 

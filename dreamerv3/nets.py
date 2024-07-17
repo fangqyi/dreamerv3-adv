@@ -110,51 +110,30 @@ class RSSM(nj.Module):
     return {'dyn': dyn, 'rep': rep}, metrics
     
   def get_perturbed_img(self, enc, act_space, prevlat, prevact, data):
-    #print(data)
-    #print(prevact)
-    data_cp = data.copy()
-    image = data_cp['image']
+
+    def dyn_loss(img, carry, data, curacts):
+      data['image'] = img 
+      data = {k: data[k][None] for k in data.keys()}
+      embed = enc(data, bdims=1)
+      carry, outs = self.observe(carry, curacts, embed, data['is_first'], bdims=1)
+      post = outs['logit']
+      prior = self._prior(outs.get('feat', outs['deter']))
+      return self._dist(post).kl_divergence(self._dist(prior))[0], {k: carry[k] for k in carry.keys()}
+    dyn_loss_grad = jax.vmap(jax.grad(dyn_loss, has_aux=True))
+    def scan_over_sequence(carry, tup):
+      data1, act = tup
+      grad_val, carry_val = dyn_loss_grad(data1['image'], carry, data1, act)
+      return carry_val, grad_val
+
+    data_cp = jax.tree_util.tree_map(lambda x: x.swapaxes(0, 1), data.copy())
     prevacts = {
         k: jnp.concatenate([prevact[k][:, None], data[k][:, :-1]], 1)
         for k in act_space}
-    prevacts = jaxutils.onehot_dict(prevacts, act_space) # [batch, seq, :]
-    perturb = jax.numpy.zeros(image.shape)
-    carry = prevlat
-    for seqidx in range(image.shape[1]):
-      #print("seq", seqidx)
-      curacts = {k: prevacts[k][:, seqidx] for k in prevacts.keys()}
-      curdata = {k: data[k][:, seqidx] for k in data.keys()}
-      curimg = curdata.pop('image')   
-      def dyn_loss(img, carry, data, curacts):
-        data['image'] = img 
-        data = {k: data[k][None] for k in data.keys()}
-        #print(data)
-        embed = enc(data, bdims=1)
-        carry, outs = self.observe(carry, curacts, embed, data['is_first'], bdims=1)
-        post = outs['logit']
-        prior = self._prior(outs.get('feat', outs['deter']))
-        return self._dist(post).kl_divergence(self._dist(prior))[0], {k: carry[k][0] for k in carry.keys()}
-      next_carry = []
-      for batchidx in range(image.shape[0]):  
-        #print('batch', batchidx)
-        if isinstance(carry, dict):
-          carry_val = {k: carry[k][batchidx][None] for k in carry.keys()}
-        else:
-          carry_val = {k: carry[batchidx][k][None] for k in carry[batchidx].keys()}
-        curdata_val = {k: curdata[k][batchidx] for k in curdata.keys()}
-        curacts_val = {k: curacts[k][batchidx][None] for k in curacts.keys()}
-        grad_val, carry_val = jax.grad(dyn_loss, has_aux=True)(curimg[batchidx], carry_val, curdata_val, curacts_val)
-        next_carry.append(carry_val)
-        perturb = perturb.at[batchidx, seqidx].add(0.5 * jax.numpy.sign(sg(grad_val)))
-      carry = next_carry
-    return perturb
-    # data [batch, seq, :]
-    #jaxutils.scan(jax.vmap(loss_grad, in_axes=(0, 0)), prev, data)
-    # prev [batch, :]
-    #data = {k: jax.numpy.swapaxes(data[k], 0, 1) for k in data.keys()} # [seq, batch, :]
-    #grad_func = lambda x : jaxutils.scan(jax.lax.map(bind(jax.vmap(bind(self.dyn.loss_grad, self.enc, self.act_space), in_axes=(0, 0, 0)), prevlat, prevact), x)
-    #data['image'] += jax.numpy.sign(grad_func(data)).reshape(data['image'].shape) * 0.5 # epilson = 0.5 perturbation scale
-
+    prevacts = jaxutils.onehot_dict(prevacts, act_space)
+    prevacts = jax.tree_util.tree_map(lambda x: jnp.expand_dims(x.swapaxes(0, 1), 2), prevacts)
+    carry = jax.tree_util.tree_map(lambda x: jnp.expand_dims(x, 1).astype(jnp.bfloat16), prevlat)
+    _, grads = nj.scan(scan_over_sequence, carry, (data_cp, prevacts))
+    return jnp.sign(grads.swapaxes(0, 1)) * 0.5
 
   def _prior(self, feat):
     kw = dict(**self.kw, norm=self.norm, act=self.act)

@@ -6,4 +6,4 @@ __pycache__/
 MUJOCO_LOG.TXT
 ;
 lab/
-logdir_*/
+logdir*/
